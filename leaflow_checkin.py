@@ -1,23 +1,22 @@
 #!/usr/bin/env python3
 """
-Leaflow 多账号自动签到脚本
-变量名：LEAFLOW_ACCOUNTS
-变量值：邮箱1:密码1,邮箱2:密码2,邮箱3:密码3
+Leaflow 多账号自动签到脚本 - 完整修复版
 """
 
 import os
 import time
 import logging
 import re
+import requests
+from datetime import datetime
+
 from selenium import webdriver
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.common.action_chains import ActionChains
-from selenium.common.exceptions import TimeoutException
-import requests
-from datetime import datetime
+from selenium.common.exceptions import TimeoutException, NoSuchElementException
 
 # 配置日志
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -40,17 +39,15 @@ class LeaflowAutoCheckin:
         """设置Chrome驱动选项"""
         chrome_options = Options()
         
-        # GitHub Actions环境配置
         if os.getenv('GITHUB_ACTIONS'):
             chrome_options.add_argument('--headless')
             chrome_options.add_argument('--no-sandbox')
             chrome_options.add_argument('--disable-dev-shm-usage')
             chrome_options.add_argument('--disable-gpu')
             chrome_options.add_argument('--window-size=1920,1080')
-            # 增加User-Agent伪装，防止被Cloudflare拦截
+            # 关键：模拟真实浏览器 UA
             chrome_options.add_argument('--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36')
         
-        # 通用配置
         chrome_options.add_argument('--disable-blink-features=AutomationControlled')
         chrome_options.add_experimental_option("excludeSwitches", ["enable-automation"])
         chrome_options.add_experimental_option('useAutomationExtension', False)
@@ -61,108 +58,45 @@ class LeaflowAutoCheckin:
     def close_popup(self):
         """关闭初始弹窗"""
         try:
-            logger.info("尝试关闭初始弹窗...")
-            time.sleep(3)  # 等待弹窗加载
-            
-            # 尝试关闭弹窗
-            try:
-                actions = ActionChains(self.driver)
-                actions.move_by_offset(10, 10).click().perform()
-                logger.info("已成功关闭弹窗")
-                time.sleep(2)
-                return True
-            except:
-                pass
-            return False
-            
-        except Exception as e:
-            logger.warning(f"关闭弹窗时出错: {e}")
-            return False
-    
-    def wait_for_element_clickable(self, by, value, timeout=10):
-        """等待元素可点击"""
-        return WebDriverWait(self.driver, timeout).until(
-            EC.element_to_be_clickable((by, value))
-        )
-    
-    def wait_for_element_present(self, by, value, timeout=10):
-        """等待元素出现"""
-        return WebDriverWait(self.driver, timeout).until(
-            EC.presence_of_element_located((by, value))
-        )
-    
+            time.sleep(3)
+            actions = ActionChains(self.driver)
+            actions.move_by_offset(10, 10).click().perform()
+            logger.info("尝试关闭弹窗完成")
+            time.sleep(2)
+        except:
+            pass
+
     def login(self):
         """执行登录流程"""
-        logger.info(f"开始登录流程")
-        
-        # 访问登录页面
+        logger.info(f"正在登录账号: {self.email[:3]}***")
         self.driver.get("https://leaflow.net/login")
         time.sleep(5)
         
-        # 关闭弹窗
         self.close_popup()
         
-        # 输入邮箱
         try:
-            logger.info("查找邮箱输入框...")
-            time.sleep(2)
-            
-            email_selectors = [
-                "input[type='text']",
-                "input[type='email']", 
-                "input[placeholder*='邮箱']",
-                "input[name='email']"
-            ]
-            
-            email_input = None
-            for selector in email_selectors:
-                try:
-                    email_input = self.wait_for_element_clickable(By.CSS_SELECTOR, selector, 5)
-                    break
-                except:
-                    continue
-            
-            if not email_input:
-                raise Exception("找不到邮箱输入框")
-            
+            # 邮箱定位
+            wait = WebDriverWait(self.driver, 15)
+            email_input = wait.until(EC.element_to_be_clickable((By.CSS_SELECTOR, "input[type='text'], input[type='email'], input[name='email']")))
             email_input.clear()
             email_input.send_keys(self.email)
-            logger.info("邮箱输入完成")
-            time.sleep(1)
             
-        except Exception as e:
-            try:
-                self.driver.execute_script(f"document.querySelector('input[type=\"text\"], input[type=\"email\"]').value = '{self.email}';")
-                logger.info("通过JavaScript强制设置邮箱")
-            except:
-                raise Exception(f"无法输入邮箱: {e}")
-        
-        # 等待密码输入框
-        try:
-            password_input = self.wait_for_element_clickable(By.CSS_SELECTOR, "input[type='password']", 10)
+            # 密码定位
+            password_input = self.driver.find_element(By.CSS_SELECTOR, "input[type='password']")
             password_input.clear()
             password_input.send_keys(self.password)
-            logger.info("密码输入完成")
-        except:
-            raise Exception("找不到密码输入框")
-        
-        # 点击登录
-        try:
-            login_btn = self.wait_for_element_clickable(By.XPATH, "//button[@type='submit' or contains(text(), '登录')]", 10)
+            
+            # 登录按钮
+            login_btn = self.driver.find_element(By.XPATH, "//button[@type='submit' or contains(text(), '登录')]")
             login_btn.click()
-            logger.info("已点击登录按钮")
-        except Exception as e:
-            raise Exception(f"点击登录按钮失败: {e}")
-        
-        # 等待跳转
-        try:
-            WebDriverWait(self.driver, 20).until(
-                lambda driver: "login" not in driver.current_url
-            )
-            logger.info(f"登录成功，当前URL: {self.driver.current_url}")
+            
+            # 等待页面跳转
+            wait.until(lambda d: "login" not in d.current_url)
+            logger.info("登录成功")
             return True
-        except:
-            raise Exception("登录超时")
+        except Exception as e:
+            logger.error(f"登录失败: {e}")
+            return False
 
     def get_balance(self):
         """获取余额"""
@@ -170,136 +104,109 @@ class LeaflowAutoCheckin:
             self.driver.get("https://leaflow.net/dashboard")
             time.sleep(3)
             page_text = self.driver.find_element(By.TAG_NAME, "body").text
-            # 正则匹配金额
             match = re.search(r'(?:¥|￥|余额)\s*(\d+\.?\d*)', page_text)
-            if match:
-                balance = match.group(1)
-                logger.info(f"找到余额: {balance}元")
-                return f"{balance}元"
-            return "未知"
+            return f"{match.group(1)}元" if match else "未知"
         except:
             return "未知"
 
     def checkin(self):
-        """执行签到流程 - 针对新版HTML修复"""
-        logger.info("正在跳转至签到页面...")
+        """核心签到逻辑 - 针对你提供的 HTML 结构"""
+        logger.info("正在跳转至签到子站...")
         self.driver.get("https://checkin.leaflow.net")
         
-        # 增加等待，确保JS渲染完成
-        time.sleep(10)
+        # 页面加载缓冲
+        time.sleep(8)
         
         try:
-            # 1. 查找签到按钮 (针对你提供的 HTML: 类名为 checkin-btn)
             wait = WebDriverWait(self.driver, 20)
+            # 根据提供的源码：按钮类名是 checkin-btn
             btn = wait.until(EC.presence_of_element_located((By.CLASS_NAME, "checkin-btn")))
             
             btn_text = btn.text.strip()
             is_disabled = btn.get_attribute("disabled") is not None
             
-            logger.info(f"当前按钮状态: 文本='{btn_text}', 是否禁用={is_disabled}")
+            logger.info(f"按钮检测: [{btn_text}] | 禁用状态: {is_disabled}")
 
-            # 2. 判断状态逻辑
             if "已完成" in btn_text or is_disabled:
-                logger.info("伙计，今日你已经签到过了！")
-                return "今日已签到"
+                return "今日已签到过"
             
-            # 3. 尝试点击
-            logger.info("找到可点击的签到按钮，正在执行...")
-            self.driver.execute_script("arguments[0].click();", btn) # 使用JS点击更稳定
+            # 模拟点击
+            logger.info("执行签到点击...")
+            self.driver.execute_script("arguments[0].click();", btn)
             time.sleep(5)
             
-            # 4. 再次检查状态确认成功
-            new_btn = self.driver.find_element(By.CLASS_NAME, "checkin-btn")
-            if "已完成" in new_btn.text or new_btn.get_attribute("disabled"):
-                # 尝试抓取奖励数值
-                try:
-                    reward = self.driver.find_element(By.CLASS_NAME, "reward-amount").text
-                    return f"签到成功！获得 {reward}"
-                except:
-                    return "签到完成"
-            else:
-                return "点击了按钮但状态未更新"
+            # 验证结果
+            try:
+                reward = self.driver.find_element(By.CLASS_NAME, "reward-amount").text
+                return f"签到成功 ({reward})"
+            except:
+                return "签到已发送"
 
         except TimeoutException:
-            # 如果超时，可能是被Cloudflare拦截，打印标题排查
+            # 针对 502 等异常情况的诊断
             title = self.driver.title
-            logger.error(f"加载超时，当前页面标题: {title}")
-            if "Cloudflare" in title or "Just a moment" in title:
-                raise Exception("被Cloudflare防火墙拦截，GitHub Actions IP 无法访问")
-            raise Exception("在签到页面未找到 checkin-btn 按钮")
+            if "502" in title or "Gateway" in title:
+                return "服务器502报错"
+            return "未找到签到按钮"
 
     def run(self):
-        """单账号执行"""
+        """单账号任务入口"""
+        result_msg = "未知错误"
+        balance = "未知"
+        success = False
         try:
             if self.login():
-                result = self.checkin()
+                result_msg = self.checkin()
                 balance = self.get_balance()
-                return True, result, balance
-            return False, "登录失败", "未知"
+                success = True if "成功" in result_msg or "签到过" in result_msg else False
         except Exception as e:
-            return False, str(e), "未知"
+            result_msg = str(e)
         finally:
             if self.driver:
                 self.driver.quit()
+        return success, result_msg, balance
 
 class MultiAccountManager:
     def __init__(self):
-        self.telegram_bot_token = os.getenv('TELEGRAM_BOT_TOKEN', '')
-        self.telegram_chat_id = os.getenv('TELEGRAM_CHAT_ID', '')
-        self.accounts = self.load_accounts()
-    
-    def load_accounts(self):
+        self.accounts = self.load_config()
+        self.bot_token = os.getenv('TELEGRAM_BOT_TOKEN')
+        self.chat_id = os.getenv('TELEGRAM_CHAT_ID')
+
+    def load_config(self):
         accounts = []
-        accounts_str = os.getenv('LEAFLOW_ACCOUNTS', '').strip()
-        if accounts_str:
-            for pair in accounts_str.split(','):
-                if ':' in pair:
-                    email, password = pair.split(':', 1)
-                    accounts.append({'email': email.strip(), 'password': password.strip()})
-        
+        raw = os.getenv('LEAFLOW_ACCOUNTS', '')
+        if raw:
+            for item in raw.split(','):
+                if ':' in item:
+                    u, p = item.split(':', 1)
+                    accounts.append({'email': u.strip(), 'password': p.strip()})
         if not accounts:
-            email = os.getenv('LEAFLOW_EMAIL')
-            password = os.getenv('LEAFLOW_PASSWORD')
-            if email and password:
-                accounts.append({'email': email, 'password': password})
-        
-        if not accounts:
-            raise ValueError("未找到有效账号配置")
+            u, p = os.getenv('LEAFLOW_EMAIL'), os.getenv('LEAFLOW_PASSWORD')
+            if u and p: accounts.append({'email': u, 'password': p})
         return accounts
-    
-    def send_notification(self, results):
-        if not self.telegram_bot_token or not self.telegram_chat_id:
-            return
+
+    def send_tg(self, results):
+        if not self.bot_token or not self.chat_id: return
+        
+        success_num = sum(1 for _, s, _, _ in results if s)
+        text = f"<b>🎁 Leaflow 签到报告</b>\n成功: {success_num}/{len(results)}\n"
+        for email, success, msg, bal in results:
+            icon = "✅" if success else "❌"
+            masked = email[:2] + "**" + email[email.find("@"):]
+            text += f"\n{icon} {masked}\n结果: {msg}\n余额: {bal}\n"
+        
         try:
-            success_count = sum(1 for _, s, _, _ in results if s)
-            current_date = datetime.now().strftime("%Y/%m/%d")
-            msg = f"🎁 <b>Leaflow自动签到汇总</b>\n📊 成功: {success_count}/{len(results)}\n📅 日期: {current_date}\n\n"
-            for email, success, res, bal in results:
-                masked = email[:3] + "***" + email[email.find("@"):]
-                status = "✅" if success else "❌"
-                msg += f"账号: {masked}\n{status} {res}\n💰 余额: {bal}\n\n"
-            
-            requests.post(f"https://api.telegram.org/bot{self.telegram_bot_token}/sendMessage", 
-                          data={"chat_id": self.telegram_chat_id, "text": msg, "parse_mode": "HTML"}, timeout=10)
-        except Exception as e:
-            logger.error(f"通知发送失败: {e}")
+            requests.post(f"https://api.telegram.org/bot{self.bot_token}/sendMessage", 
+                          data={"chat_id": self.chat_id, "text": text, "parse_mode": "HTML"}, timeout=10)
+        except: pass
 
-    def run_all(self):
-        results = []
-        for account in self.accounts:
-            success, res, bal = LeaflowAutoCheckin(account['email'], account['password']).run()
-            results.append((account['email'], success, res, bal))
-            time.sleep(5)
-        self.send_notification(results)
-        return results
-
-def main():
-    try:
-        manager = MultiAccountManager()
-        manager.run_all()
-    except Exception as e:
-        logger.error(f"运行出错: {e}")
-        exit(1)
+    def start(self):
+        final_results = []
+        for acc in self.accounts:
+            success, msg, bal = LeaflowAutoCheckin(acc['email'], acc['password']).run()
+            final_results.append((acc['email'], success, msg, bal))
+            time.sleep(2)
+        self.send_tg(final_results)
 
 if __name__ == "__main__":
-    main()
+    MultiAccountManager().start()
