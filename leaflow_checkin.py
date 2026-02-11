@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Leaflow 多账号自动签到脚本
+Leaflow 多账号自动签到脚本 - 增强调试版
 变量名：LEAFLOW_ACCOUNTS
 变量值：邮箱1:密码1,邮箱2:密码2,邮箱3:密码3
 """
@@ -14,6 +14,7 @@ from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.common.action_chains import ActionChains
+from selenium.common.exceptions import TimeoutException
 import requests
 from datetime import datetime
 
@@ -53,6 +54,121 @@ class LeaflowAutoCheckin:
         
         self.driver = webdriver.Chrome(options=chrome_options)
         self.driver.execute_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
+    
+    def debug_page_state(self, filename="debug_page"):
+        """保存页面源码和截图用于调试"""
+        try:
+            # 保存HTML源码
+            with open(f"{filename}.html", "w", encoding="utf-8") as f:
+                f.write(self.driver.page_source)
+            logger.info(f"已保存页面源码: {filename}.html")
+            
+            # 保存截图
+            self.driver.save_screenshot(f"{filename}.png")
+            logger.info(f"已保存截图: {filename}.png")
+            
+            # 记录当前URL和页面标题
+            logger.info(f"当前URL: {self.driver.current_url}")
+            logger.info(f"页面标题: {self.driver.title}")
+            
+            # 记录可见的按钮
+            buttons = self.driver.find_elements(By.TAG_NAME, "button")
+            logger.info(f"页面上找到 {len(buttons)} 个按钮")
+            for i, btn in enumerate(buttons[:10]):  # 记录前10个按钮
+                try:
+                    btn_text = btn.text.strip()
+                    btn_class = btn.get_attribute('class')
+                    btn_visible = btn.is_displayed()
+                    logger.info(f"按钮 {i}: 文本='{btn_text}', class='{btn_class}', 可见={btn_visible}")
+                except:
+                    pass
+            
+            # 记录所有链接
+            links = self.driver.find_elements(By.TAG_NAME, "a")
+            logger.info(f"页面上找到 {len(links)} 个链接")
+            for i, link in enumerate(links[:10]):
+                try:
+                    link_text = link.text.strip()
+                    link_href = link.get_attribute('href')
+                    logger.info(f"链接 {i}: 文本='{link_text}', href='{link_href}'")
+                except:
+                    pass
+                    
+        except Exception as e:
+            logger.error(f"调试信息捕获失败: {e}")
+    
+    def wait_for_page_ready(self, timeout=30):
+        """等待页面完全加载，包括JavaScript"""
+        try:
+            # 等待document.readyState变为complete
+            WebDriverWait(self.driver, timeout).until(
+                lambda driver: driver.execute_script("return document.readyState") == "complete"
+            )
+            logger.info("页面加载状态: complete")
+            
+            # 如果页面使用jQuery，等待它完成（可选）
+            try:
+                WebDriverWait(self.driver, 5).until(
+                    lambda driver: driver.execute_script("return typeof jQuery != 'undefined' && jQuery.active == 0")
+                )
+                logger.info("jQuery加载完成")
+            except:
+                logger.debug("未检测到jQuery或页面不使用jQuery")
+            
+            # 额外等待动态内容
+            time.sleep(3)
+            return True
+            
+        except Exception as e:
+            logger.warning(f"页面就绪检查超时: {e}")
+            return False
+    
+    def switch_to_checkin_iframe(self):
+        """检查并切换到包含签到按钮的iframe"""
+        try:
+            iframes = self.driver.find_elements(By.TAG_NAME, "iframe")
+            logger.info(f"页面上找到 {len(iframes)} 个iframe")
+            
+            if len(iframes) == 0:
+                return False
+            
+            for i, iframe in enumerate(iframes):
+                try:
+                    self.driver.switch_to.frame(iframe)
+                    logger.info(f"切换到iframe {i}")
+                    
+                    # 尝试查找签到按钮
+                    try:
+                        checkin_btn = self.driver.find_element(By.CSS_SELECTOR, "button.checkin-btn")
+                        if checkin_btn.is_displayed():
+                            logger.info(f"在iframe {i} 中找到签到按钮")
+                            return True
+                    except:
+                        pass
+                    
+                    # 尝试其他选择器
+                    try:
+                        checkin_btn = self.driver.find_element(By.XPATH, "//button[contains(text(), '签到')]")
+                        if checkin_btn.is_displayed():
+                            logger.info(f"在iframe {i} 中找到签到按钮（通过xpath）")
+                            return True
+                    except:
+                        pass
+                    
+                    # 如果没找到，切换回主页面
+                    self.driver.switch_to.default_content()
+                except Exception as e:
+                    logger.debug(f"检查iframe {i} 时出错: {e}")
+                    try:
+                        self.driver.switch_to.default_content()
+                    except:
+                        pass
+                    continue
+            
+            return False
+        except Exception as e:
+            logger.error(f"检查iframe时出错: {e}")
+            return False
         
     def close_popup(self):
         """关闭初始弹窗"""
@@ -120,7 +236,7 @@ class LeaflowAutoCheckin:
             for selector in email_selectors:
                 try:
                     email_input = self.wait_for_element_clickable(By.CSS_SELECTOR, selector, 5)
-                    logger.info(f"找到邮箱输入框")
+                    logger.info(f"找到邮箱输入框: {selector}")
                     break
                 except:
                     continue
@@ -179,7 +295,7 @@ class LeaflowAutoCheckin:
                         login_btn = self.wait_for_element_clickable(By.XPATH, selector, 5)
                     else:
                         login_btn = self.wait_for_element_clickable(By.CSS_SELECTOR, selector, 5)
-                    logger.info(f"找到登录按钮")
+                    logger.info(f"找到登录按钮: {selector}")
                     break
                 except:
                     continue
@@ -270,43 +386,65 @@ class LeaflowAutoCheckin:
             logger.warning(f"获取余额时出错: {e}")
             return "未知"
     
-    def wait_for_checkin_page_loaded(self, max_retries=3, wait_time=20):
-        """等待签到页面完全加载，支持重试"""
+    def wait_for_checkin_page_loaded(self, max_retries=5, wait_time=30):
+        """增强版签到页面加载等待 - 支持多次重试和调试"""
         for attempt in range(max_retries):
-            logger.info(f"等待签到页面加载，尝试 {attempt + 1}/{max_retries}，等待 {wait_time} 秒...")
-            time.sleep(wait_time)
+            logger.info(f"尝试 {attempt + 1}/{max_retries} 加载签到页面...")
             
-            try:
-                # 检查页面是否包含签到相关元素
-                checkin_indicators = [
-                    "button.checkin-btn",  # 优先使用这个选择器
-                    "//button[contains(text(), '立即签到')]",
-                    "//button[contains(text(), '已签到')]",
-                    "//*[contains(text(), '每日签到')]",
-                    "//*[contains(text(), '签到')]"
-                ]
-                
-                for indicator in checkin_indicators:
-                    try:
-                        if indicator.startswith("//"):
-                            element = WebDriverWait(self.driver, 10).until(
-                                EC.presence_of_element_located((By.XPATH, indicator))
-                            )
-                        else:
-                            element = WebDriverWait(self.driver, 10).until(
-                                EC.presence_of_element_located((By.CSS_SELECTOR, indicator))
-                            )
-                        
-                        if element.is_displayed():
-                            logger.info(f"找到签到页面元素")
-                            return True
-                    except:
-                        continue
-                
-                logger.warning(f"第 {attempt + 1} 次尝试未找到签到按钮，继续等待...")
-                
-            except Exception as e:
-                logger.warning(f"第 {attempt + 1} 次检查签到页面时出错: {e}")
+            # 等待页面完全就绪
+            self.wait_for_page_ready(timeout=wait_time)
+            
+            # 检查iframe
+            if self.switch_to_checkin_iframe():
+                logger.info("在iframe中找到签到按钮")
+                return True
+            
+            # 尝试所有可能的选择器
+            all_selectors = [
+                ("css", "button.checkin-btn"),
+                ("css", "button[class*='checkin']"),
+                ("css", "button[class*='check-in']"),
+                ("css", "button[id*='checkin']"),
+                ("css", "button[id*='check-in']"),
+                ("xpath", "//button[contains(text(), '立即签到')]"),
+                ("xpath", "//button[contains(text(), '签到')]"),
+                ("xpath", "//button[contains(text(), '已签到')]"),
+                ("xpath", "//button[contains(text(), 'Check In')]"),
+                ("xpath", "//button[contains(text(), 'Checkin')]"),
+                ("xpath", "//*[contains(text(), '每日签到')]"),
+                ("xpath", "//a[contains(text(), '签到')]"),
+                ("css", "button[type='submit']"),
+                ("css", "a.checkin-btn"),
+                ("css", "div[class*='checkin'] button"),
+            ]
+            
+            for selector_type, selector in all_selectors:
+                try:
+                    if selector_type == "css":
+                        element = WebDriverWait(self.driver, 3).until(
+                            EC.presence_of_element_located((By.CSS_SELECTOR, selector))
+                        )
+                    else:
+                        element = WebDriverWait(self.driver, 3).until(
+                            EC.presence_of_element_located((By.XPATH, selector))
+                        )
+                    
+                    if element.is_displayed():
+                        logger.info(f"✅ 找到签到元素 (选择器: {selector})")
+                        return True
+                except:
+                    continue
+            
+            # 如果是最后一次尝试，保存调试信息
+            if attempt == max_retries - 1:
+                logger.error("❌ 所有尝试失败，保存调试信息...")
+                self.debug_page_state(f"checkin_failed_{int(time.time())}")
+                return False
+            
+            # 否则刷新页面重试
+            logger.warning(f"第 {attempt + 1} 次未找到签到按钮，刷新页面重试...")
+            self.driver.refresh()
+            time.sleep(5)
         
         return False
     
@@ -316,80 +454,159 @@ class LeaflowAutoCheckin:
         
         try:
             # 先等待页面可能的重载
-            time.sleep(5)
+            time.sleep(3)
             
-            # 使用和单账号成功时相同的选择器
+            # 使用更全面的选择器列表
             checkin_selectors = [
-                "button.checkin-btn",
-                "//button[contains(text(), '立即签到')]",
-                "//button[contains(@class, 'checkin')]",
-                "button[type='submit']",
-                "button[name='checkin']"
+                ("css", "button.checkin-btn"),
+                ("xpath", "//button[contains(text(), '立即签到')]"),
+                ("xpath", "//button[contains(text(), '签到')]"),
+                ("xpath", "//button[contains(text(), '已签到')]"),
+                ("css", "button[class*='checkin']"),
+                ("css", "button[type='submit']"),
+                ("css", "button[name='checkin']"),
+                ("xpath", "//a[contains(text(), '签到')]"),
+                ("css", "a.checkin-btn"),
             ]
             
-            for selector in checkin_selectors:
+            for selector_type, selector in checkin_selectors:
                 try:
-                    if selector.startswith("//"):
-                        checkin_btn = WebDriverWait(self.driver, 15).until(
-                            EC.presence_of_element_located((By.XPATH, selector))
+                    if selector_type == "css":
+                        checkin_btn = WebDriverWait(self.driver, 10).until(
+                            EC.presence_of_element_located((By.CSS_SELECTOR, selector))
                         )
                     else:
-                        checkin_btn = WebDriverWait(self.driver, 15).until(
-                            EC.presence_of_element_located((By.CSS_SELECTOR, selector))
+                        checkin_btn = WebDriverWait(self.driver, 10).until(
+                            EC.presence_of_element_located((By.XPATH, selector))
                         )
                     
                     if checkin_btn.is_displayed():
                         # 检查按钮文本，如果包含"已签到"则说明今天已经签到过了
                         btn_text = checkin_btn.text.strip()
-                        if "已签到" in btn_text:
-                            logger.info("伙计，今日你已经签到过了！")
+                        logger.info(f"找到按钮，文本: '{btn_text}'")
+                        
+                        if "已签到" in btn_text or "已完成" in btn_text:
+                            logger.info("今日已经签到过了！")
                             return "already_checked_in"
                         
                         # 检查按钮是否可用
                         if checkin_btn.is_enabled():
-                            logger.info(f"找到并点击立即签到按钮")
-                            checkin_btn.click()
+                            logger.info(f"找到并点击签到按钮 (选择器: {selector})")
+                            
+                            # 尝试滚动到按钮位置
+                            try:
+                                self.driver.execute_script("arguments[0].scrollIntoView(true);", checkin_btn)
+                                time.sleep(1)
+                            except:
+                                pass
+                            
+                            # 点击按钮
+                            try:
+                                checkin_btn.click()
+                            except:
+                                # 如果普通点击失败，使用JavaScript点击
+                                self.driver.execute_script("arguments[0].click();", checkin_btn)
+                            
                             return True
                         else:
                             logger.info("签到按钮不可用，可能已经签到过了")
                             return "already_checked_in"
                         
                 except Exception as e:
-                    logger.debug(f"选择器未找到按钮: {e}")
+                    logger.debug(f"选择器 {selector} 未找到按钮: {e}")
                     continue
             
-            logger.error("找不到签到按钮")
+            logger.error("❌ 找不到签到按钮")
+            self.debug_page_state(f"no_button_{int(time.time())}")
             return False
                     
         except Exception as e:
             logger.error(f"查找签到按钮时出错: {e}")
             return False
     
+    def checkin_via_api(self):
+        """尝试通过API签到（备用方案）"""
+        try:
+            logger.info("尝试API签到...")
+            
+            # 从浏览器会话获取cookies
+            cookies = {cookie['name']: cookie['value'] for cookie in self.driver.get_cookies()}
+            
+            # 尝试常见的签到API端点
+            api_urls = [
+                "https://leaflow.net/api/checkin",
+                "https://checkin.leaflow.net/api/checkin",
+                "https://leaflow.net/api/user/checkin",
+                "https://leaflow.net/user/checkin",
+            ]
+            
+            headers = {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+                'Accept': 'application/json',
+            }
+            
+            for url in api_urls:
+                try:
+                    logger.info(f"尝试API端点: {url}")
+                    response = requests.post(url, cookies=cookies, headers=headers, timeout=10)
+                    logger.info(f"API响应状态码: {response.status_code}")
+                    
+                    if response.status_code == 200:
+                        logger.info(f"✅ API签到成功: {url}")
+                        try:
+                            result = response.json()
+                            logger.info(f"API返回: {result}")
+                            return result
+                        except:
+                            return {"success": True, "message": "API签到成功"}
+                except Exception as e:
+                    logger.debug(f"API端点 {url} 失败: {e}")
+                    continue
+            
+            logger.warning("所有API端点都失败了")
+            return None
+        except Exception as e:
+            logger.error(f"API签到失败: {e}")
+            return None
+    
     def checkin(self):
-        """执行签到流程"""
+        """执行签到流程 - 增强版"""
         logger.info("跳转到签到页面...")
         
         # 跳转到签到页面
         self.driver.get("https://checkin.leaflow.net")
         
-        # 等待签到页面加载（最多重试3次，每次等待20秒）
-        if not self.wait_for_checkin_page_loaded(max_retries=3, wait_time=20):
-            raise Exception("签到页面加载失败，无法找到签到相关元素")
+        # 等待签到页面加载（最多重试5次，每次等待30秒）
+        if not self.wait_for_checkin_page_loaded(max_retries=5, wait_time=30):
+            logger.warning("UI签到页面加载失败，尝试API签到...")
+            
+            # 尝试API签到作为备用方案
+            api_result = self.checkin_via_api()
+            if api_result:
+                return "API签到成功"
+            
+            raise Exception("签到页面加载失败，UI和API方式都无法签到")
         
-        # 查找并点击立即签到按钮
+        # 查找并点击签到按钮
         checkin_result = self.find_and_click_checkin_button()
         
         if checkin_result == "already_checked_in":
             return "今日已签到"
         elif checkin_result is True:
-            logger.info("已点击立即签到按钮")
+            logger.info("已点击签到按钮")
             time.sleep(5)  # 等待签到结果
             
             # 获取签到结果
             result_message = self.get_checkin_result()
             return result_message
         else:
-            raise Exception("找不到立即签到按钮或按钮不可点击")
+            # 最后尝试API签到
+            logger.warning("无法点击签到按钮，尝试API签到...")
+            api_result = self.checkin_via_api()
+            if api_result:
+                return "API签到成功"
+            
+            raise Exception("找不到签到按钮或按钮不可点击，且API签到也失败")
     
     def get_checkin_result(self):
         """获取签到结果消息"""
@@ -417,6 +634,7 @@ class LeaflowAutoCheckin:
                     if element.is_displayed():
                         text = element.text.strip()
                         if text:
+                            logger.info(f"找到签到结果消息: {text}")
                             return text
                 except:
                     continue
@@ -431,13 +649,14 @@ class LeaflowAutoCheckin:
                     lines = page_text.split('\n')
                     for line in lines:
                         if keyword in line and len(line.strip()) < 100:  # 避免提取过长的文本
+                            logger.info(f"从页面文本找到结果: {line.strip()}")
                             return line.strip()
             
             # 检查签到按钮状态变化
             try:
                 checkin_btn = self.driver.find_element(By.CSS_SELECTOR, "button.checkin-btn")
                 if not checkin_btn.is_enabled() or "已签到" in checkin_btn.text or "disabled" in checkin_btn.get_attribute("class"):
-                    return "今日已签到完成"
+                    return "签到完成"
             except:
                 pass
             
@@ -449,7 +668,7 @@ class LeaflowAutoCheckin:
     def run(self):
         """单个账号执行流程"""
         try:
-            logger.info(f"开始处理账号")
+            logger.info(f"开始处理账号: {self.email[:3]}***{self.email[self.email.find('@'):]}")
             
             # 登录
             if self.login():
@@ -459,19 +678,22 @@ class LeaflowAutoCheckin:
                 # 获取余额
                 balance = self.get_balance()
                 
-                logger.info(f"签到结果: {result}, 余额: {balance}")
+                logger.info(f"✅ 签到结果: {result}, 余额: {balance}")
                 return True, result, balance
             else:
                 raise Exception("登录失败")
                 
         except Exception as e:
             error_msg = f"自动签到失败: {str(e)}"
-            logger.error(error_msg)
+            logger.error(f"❌ {error_msg}")
             return False, error_msg, "未知"
         
         finally:
             if self.driver:
-                self.driver.quit()
+                try:
+                    self.driver.quit()
+                except:
+                    pass
 
 class MultiAccountManager:
     """多账号管理器 - 简化配置版本"""
@@ -494,7 +716,7 @@ class MultiAccountManager:
                 logger.info("尝试解析冒号分隔多账号配置")
                 account_pairs = [pair.strip() for pair in accounts_str.split(',')]
                 
-                logger.info(f"找到 {len(account_pairs)} 个账号")
+                logger.info(f"找到 {len(account_pairs)} 个账号配置")
                 
                 for i, pair in enumerate(account_pairs):
                     if ':' in pair:
@@ -507,11 +729,11 @@ class MultiAccountManager:
                                 'email': email,
                                 'password': password
                             })
-                            logger.info(f"成功添加第 {i+1} 个账号")
+                            logger.info(f"✅ 成功添加第 {i+1} 个账号")
                         else:
-                            logger.warning(f"账号对格式错误")
+                            logger.warning(f"⚠️ 账号对 {i+1} 格式错误")
                     else:
-                        logger.warning(f"账号对缺少冒号分隔符")
+                        logger.warning(f"⚠️ 账号对 {i+1} 缺少冒号分隔符")
                 
                 if accounts:
                     logger.info(f"从冒号分隔格式成功加载了 {len(accounts)} 个账号")
@@ -530,13 +752,13 @@ class MultiAccountManager:
                 'email': single_email,
                 'password': single_password
             })
-            logger.info("加载了单个账号配置")
+            logger.info("✅ 加载了单个账号配置")
             return accounts
         
         # 如果所有方法都失败
-        logger.error("未找到有效的账号配置")
+        logger.error("❌ 未找到有效的账号配置")
         logger.error("请检查以下环境变量设置:")
-        logger.error("1. LEAFLOW_ACCOUNTS: 冒号分隔多账号 (email1:pass1,email2:pass2)")
+        logger.error("1. LEAFFLOW_ACCOUNTS: 冒号分隔多账号 (email1:pass1,email2:pass2)")
         logger.error("2. LEAFLOW_EMAIL 和 LEAFLOW_PASSWORD: 单账号")
         
         raise ValueError("未找到有效的账号配置")
@@ -580,21 +802,23 @@ class MultiAccountManager:
             
             response = requests.post(url, data=data, timeout=10)
             if response.status_code == 200:
-                logger.info("Telegram汇总通知发送成功")
+                logger.info("✅ Telegram汇总通知发送成功")
             else:
-                logger.error(f"Telegram通知发送失败: {response.text}")
+                logger.error(f"❌ Telegram通知发送失败: {response.text}")
                 
         except Exception as e:
             logger.error(f"发送Telegram通知时出错: {e}")
     
     def run_all(self):
         """运行所有账号的签到流程"""
-        logger.info(f"开始执行 {len(self.accounts)} 个账号的签到任务")
+        logger.info(f"🚀 开始执行 {len(self.accounts)} 个账号的签到任务")
         
         results = []
         
         for i, account in enumerate(self.accounts, 1):
+            logger.info(f"{'='*60}")
             logger.info(f"处理第 {i}/{len(self.accounts)} 个账号")
+            logger.info(f"{'='*60}")
             
             try:
                 auto_checkin = LeaflowAutoCheckin(account['email'], account['password'])
@@ -604,12 +828,12 @@ class MultiAccountManager:
                 # 在账号之间添加间隔，避免请求过于频繁
                 if i < len(self.accounts):
                     wait_time = 5
-                    logger.info(f"等待{wait_time}秒后处理下一个账号...")
+                    logger.info(f"⏳ 等待{wait_time}秒后处理下一个账号...")
                     time.sleep(wait_time)
                     
             except Exception as e:
                 error_msg = f"处理账号时发生异常: {str(e)}"
-                logger.error(error_msg)
+                logger.error(f"❌ {error_msg}")
                 results.append((account['email'], False, error_msg, "未知"))
         
         # 发送汇总通知
@@ -617,6 +841,10 @@ class MultiAccountManager:
         
         # 返回总体结果
         success_count = sum(1 for _, success, _, _ in results if success)
+        logger.info(f"\n{'='*60}")
+        logger.info(f"📊 总体结果: {success_count}/{len(self.accounts)} 账号签到成功")
+        logger.info(f"{'='*60}\n")
+        
         return success_count == len(self.accounts), results
 
 def main():
@@ -626,7 +854,7 @@ def main():
         overall_success, detailed_results = manager.run_all()
         
         if overall_success:
-            logger.info("✅ 所有账号签到成功")
+            logger.info("🎉 所有账号签到成功")
             exit(0)
         else:
             success_count = sum(1 for _, success, _, _ in detailed_results if success)
@@ -636,6 +864,8 @@ def main():
             
     except Exception as e:
         logger.error(f"❌ 脚本执行出错: {e}")
+        import traceback
+        traceback.print_exc()
         exit(1)
 
 if __name__ == "__main__":
