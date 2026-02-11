@@ -1,9 +1,9 @@
 name: Leaflow Auto Checkin
 
 on:
-  schedule:
-    # 北京时间 08:15, 11:15, 14:15, 17:15, 20:15, 23:15, 02:15, 05:15
-    - cron: '15 */3 * * *' 
+schedule:
+    # 北京时间 08:15, 14:15, 20:15, 02:15 (每6小时一次)
+    - cron: '15 */6 * * *'
   workflow_dispatch: # 方便手动测试
 
 jobs:
