@@ -2,15 +2,15 @@ name: Leaflow Auto Checkin
 
 on:
   schedule:
-    # 每 3 小时运行一次 (UTC 时间 0, 3, 6, 9, 12, 15, 18, 21)
-    # 对应北京时间 08:00, 11:00, 14:00, 17:00, 20:00, 23:00, 02:00, 05:00
+    # 北京时间 08:15, 11:15, 14:15, 17:15, 20:15, 23:15, 02:15, 05:15
     - cron: '15 */3 * * *' 
-  workflow_dispatch: # 保持手动触发功能，方便随时测试
+  workflow_dispatch: # 方便手动测试
 
 jobs:
   checkin:
     runs-on: ubuntu-latest
-    timeout-minutes: 10 # 强制 10 分钟超时，防止页面死循环转圈
+    # 给脚本 15 分钟运行时间，防止死锁
+    timeout-minutes: 15
     
     steps:
     - name: Checkout code
@@ -20,7 +20,6 @@ jobs:
       uses: actions/setup-python@v5
       with:
         python-version: '3.11'
-        cache: 'pip'
         
     - name: Install dependencies
       run: |
@@ -35,13 +34,16 @@ jobs:
         TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
         TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
         GITHUB_ACTIONS: true
-      # 尝试运行脚本，如果失败会打印错误但不会阻塞后续步骤
+      # 注意：这里我们直接运行。
+      # 如果服务器 502，脚本会捕获异常并尝试通过 Telegram 告诉你，
+      # 或者在下个 3 小时周期重新尝试。
       run: python leaflow_checkin.py
 
     - name: Upload Debug Screenshot
-      if: failure() # 只有脚本报错时（比如又是 502）才上传截图
+      # 只有当 Python 脚本彻底崩溃（非业务逻辑错误）时才上传截图
+      if: failure() 
       uses: actions/upload-artifact@v4
       with:
-        name: error-debug
+        name: error-log
         path: "*.png"
         retention-days: 1
